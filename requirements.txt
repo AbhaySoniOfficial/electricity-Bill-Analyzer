@@ -1,0 +1,6 @@
+streamlit
+google-genai
+reportlab
+python-docx
+streamlit-lottie
+Pillow
