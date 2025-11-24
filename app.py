@@ -1,9 +1,7 @@
 import os
 os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 import streamlit as st
-import io
-import json
-import re
+import io, json, re
 from datetime import date
 from PIL import Image
 from docx import Document
@@ -55,10 +53,11 @@ p, label, .stText { color: #c9d1d9 !important; }
 .stTextInput > div > div > input, textarea { background-color: #0f1724 !important; color: #e6edf3 !important; border: 1px solid #263241 !important; border-radius: 10px !important; padding: 8px !important; }
 .css-1n76uvr, .stFileUploader { background-color: #0f1724 !important; border: 2px dashed #263241 !important; border-radius: 12px !important; color: #c9d1d9 !important; padding: 12px !important; }
 .stButton>button { background-color: #238636 !important; color: white !important; border-radius: 8px !important; padding: 10px 18px !important; font-weight:600 !important; }
-.stButton>button:hover { background-color: #2ea043 !important; }
 .card { background-color: #0f1724 !important; padding: 18px; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.6); }
 .stCodeBlock, .stJson { background-color: #071024 !important; border: 1px solid #263241 !important; color: #e6edf3 !important; padding: 12px !important; border-radius: 8px !important; }
-img { border-radius: 10px !important; }
+table, th, td { border-collapse: collapse; padding:8px; }
+th { background:#0e2a3a; color:#e6edf3; }
+td { background:#08151b; color:#c9d1d9; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -325,22 +324,62 @@ if st.session_state.extracted:
         st.subheader("निकाला गया डेटा")
     else:
         st.subheader("Extracted Data")
-    st.json(st.session_state.extracted)
+    # Hide raw JSON; show key summary
+    ex = st.session_state.extracted
+    summary_cols = {
+        "Consumer ID": ex.get('Consumer_ID','N/A'),
+        "Name": ex.get('Consumer_Name','N/A'),
+        "Discom": ex.get('Discom_Name','N/A'),
+        "Division": ex.get('Division','N/A'),
+        "Tariff": ex.get('Tariff_Category','N/A'),
+        "Sanctioned Load (kW)": ex.get('Sanctioned_Load_kW','N/A'),
+        "Units Consumed (kWh)": ex.get('Units_Consumed_kWh','N/A'),
+        "Bill Amount (₹)": ex.get('Total_Amount_Payable_INR','N/A')
+    }
+    st.table(summary_cols)
 
 if st.session_state.calculation:
     st.markdown("---")
     if ui_lang == "हिंदी":
-        st.subheader("स्लैब-वाइज गणना (Gemini द्वारा)")
+        st.subheader("स्लैब-वाइज गणना")
     else:
-        st.subheader("Slab-wise Calculation (From Gemini)")
-    st.code(pretty_json(st.session_state.calculation), language="json")
-    st.markdown("### Breakdown")
-    calc = st.session_state.calculation.get("calculation", {})
-    if calc:
-        st.write(f"Fixed: ₹{calc.get('fixed')}")
-        st.write(f"Energy Total: ₹{calc.get('energy_total')}")
-        st.write(f"Duty: ₹{calc.get('duty')}")
-        st.write(f"Final Total: ₹{calc.get('total')}")
+        st.subheader("Slab-wise Calculation")
+    calc = st.session_state.calculation
+    # Build table rows from calc['calculation']['energy_details']
+    energy = calc.get('calculation', {}).get('energy_details', [])
+    rows = []
+    for e in energy:
+        slab_name = e.get('slab') or e.get('range') or ''
+        units = e.get('units') or e.get('units_billed') or e.get('units_billed', 0)
+        rate = e.get('rate') or e.get('rate', 0)
+        amount = e.get('amount') or e.get('amount', 0)
+        rows.append({"Slab": slab_name, "Units": units, "Rate (₹/unit)": rate, "Amount (₹)": amount})
+    # display table
+    st.table(rows)
+    # summary
+    summ = calc.get('calculation', {})
+    fixed = summ.get('fixed', 0)
+    energy_total = summ.get('energy_total', 0)
+    duty = summ.get('duty', 0)
+    total = summ.get('total', 0)
+    provided = None
+    try:
+        provided = float(st.session_state.extracted.get('Total_Amount_Payable_INR'))
+    except:
+        provided = None
+    st.markdown("**Summary**")
+    st.write(f"Fixed Charge: ₹{fixed}")
+    st.write(f"Energy Total: ₹{energy_total}")
+    st.write(f"Duty: ₹{duty}")
+    st.write(f"Calculated Total: ₹{total}")
+    if provided is not None:
+        diff = round(abs(total - provided),2)
+        st.write(f"Bill Total (from bill): ₹{provided}")
+        st.write(f"Difference: ₹{diff}")
+        if diff <=  (0.03 * provided):
+            st.success("✅ बिल सही प्रतीत होता है।")
+        else:
+            st.error("⚠️ बिल में अंतर पाया गया — कृपया शिकायत पत्र बनाएं।")
 
 if st.session_state.analysis_mistakes is not None:
     st.markdown("---")
