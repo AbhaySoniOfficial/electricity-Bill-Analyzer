@@ -450,6 +450,6 @@ if st.session_state.letter_text:
 
 st.markdown("---")
 if ui_lang == "हिंदी":
-    st.markdown("**नोट:** Gemini API key आवश्यक है। Render पर `GEMINI_API_KEY` env में डालें। PDF के लिए `NotoSans-Regular.ttf` मौजूद होना चाहिए।")
+    st.markdown("अभय द्वारा बनाया गया है")
 else:
-    st.markdown("**Note:** Gemini API key is required. Set `GEMINI_API_KEY` as env on Render. Keep `NotoSans-Regular.ttf` in project for PDF.")
+    st.markdown("**created by Abhay soni**")
