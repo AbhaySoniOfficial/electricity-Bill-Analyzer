@@ -183,23 +183,29 @@ Thank you,
 """
     return letter
 
+
 def create_pdf_buffer(text):
     text = re.sub(r'[\u200b-\u200f\u202a-\u202e]', '', text)
+
     pdf = FPDF(format='A4')
     pdf.add_page()
     pdf.set_left_margin(12)
     pdf.set_right_margin(12)
+
     try:
         pdf.add_font("NotoSans", "", "NotoSans-Regular.ttf", uni=True)
         pdf.set_font("NotoSans", size=11)
     except:
         pdf.set_font("Arial", size=11)
+
     max_width = pdf.w - 24
+
     for para in text.split("\n"):
         line = para.strip()
         if line == "":
             pdf.ln(6)
             continue
+
         while len(line) > 0:
             try:
                 pdf.multi_cell(max_width, 6, line)
@@ -214,7 +220,9 @@ def create_pdf_buffer(text):
                     line = line[split_at:].lstrip()
                 except Exception:
                     line = line[1:]
-    buf = io.BytesIO(pdf.output(dest='S').encode('latin-1', errors='replace'))
+
+    pdf_bytes = bytes(pdf.output(dest='S'))
+    buf = io.BytesIO(pdf_bytes)
     buf.seek(0)
     return buf
 
