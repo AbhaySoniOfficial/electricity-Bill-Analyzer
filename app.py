@@ -1,14 +1,19 @@
 import streamlit as st
 import os
 import io
-from google import genai
-from google.genai import types
-from PIL import Image
-from reportlab.pdfgen import canvas
-from docx import Document
-from streamlit_lottie import st_lottie
 import json
 import time
+from google import genai
+from PIL import Image
+from docx import Document
+from streamlit_lottie import st_lottie
+import requests
+
+# --- PDF Generation (Unicode Support) ---
+# FIX: Using fpdf2 for better Hindi/Unicode support over reportlab
+from fpdf import FPDF
+# NOTE: For fpdf2 to support Hindi, you must include a TTF font file (e.g., 'NotoSans-Regular.ttf')
+# in your project and reference it correctly. We assume 'NotoSans-Regular.ttf' is in the project root.
 
 # --- कॉन्फ़िगरेशन और मॉडर्न UI सेटिंग्स ---
 st.set_page_config(
@@ -18,70 +23,33 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# API कुंजी सेटअप
-# इसे Streamlit Secrets या Render Environment Variables से लोड करें
+# API कुंजी सेटअप (FIX: Using os.environ for Render)
 try:
-    # 🔑 GEMINI_API_KEY को st.secrets या os.environ में सेट करें
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    # 🔑 Render Environment Variables से सीधे कुंजी एक्सेस करें
+    GEMINI_API_KEY = os.environ["GEMINI_API_KEY"] 
 except KeyError:
-    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-    if not GEMINI_API_KEY:
-        st.error("Error: GEMINI_API_KEY environment variable not found. Please set it up.")
+    # Local या Streamlit Secrets का fallback
+    try:
+        GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        st.error("Error: GEMINI_API_KEY environment variable not found. Please set it in Render or Streamlit Secrets.")
         st.stop()
-
+    
 # क्लाइंट इनिशियलाइज़ेशन
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Lottie एनीमेशन लोडर (मॉडर्न UI के लिए)
-def load_lottiefile(filepath: str):
-    """Lottie JSON फ़ाइल को लोड करता है"""
-    # आप इसे स्थानीय रूप से (local file) या URL से लोड कर सकते हैं
-    # यहाँ हम एक डमी संरचना का उपयोग कर रहे हैं। आपको JSON डेटा डालना होगा।
-    # उदाहरण के लिए, एक चेकिंग या रॉकेट एनीमेशन।
-    # For this example, let's use a placeholder structure
-    # Replace this with actual Lottie JSON data if available
-    return {
-        "v": "5.5.2",
-        "fr": 60,
-        "ip": 0,
-        "op": 60,
-        "w": 100,
-        "h": 100,
-        "assets": [],
-        "layers": [
-            {
-                "op": 60,
-                "ip": 0,
-                "ty": 4,
-                "nm": "Dummy Layer",
-                "ks": {
-                    "o": {
-                        "a": 0,
-                        "k": [
-                            {"i": {"x": 0.833, "y": 0.833}, "o": {"x": 0.167, "y": 0.167}, "t": 0, "s": [100]},
-                            {"i": {"x": 0.833, "y": 0.833}, "o": {"x": 0.167, "y": 0.167}, "t": 30, "s": [0]},
-                            {"i": {"x": 0.833, "y": 0.833}, "o": {"x": 0.167, "y": 0.167}, "t": 60, "s": [100]}
-                        ]
-                    },
-                    "p": {"a": 0, "k": [50, 50]},
-                    "s": {"a": 0, "k": [100, 100]},
-                    "r": {"a": 0, "k": [0]}
-                },
-                "shapes": [
-                    {
-                        "ty": "gr",
-                        "it": [
-                            {"d": 1, "ty": "el", "p": {"a": 0, "k": [0, 0]}, "s": {"a": 0, "k": [100, 100]}},
-                            {"ty": "fl", "c": {"a": 0, "k": [1, 0, 0, 1]}},
-                            {"ty": "tr"}
-                        ]
-                    }
-                ]
-            }
-        ]
-    }
+# Lottie एनीमेशन लोडर (FIX: Using URL loading for simpler setup)
+@st.cache_data
+def load_lottieurl(url: str):
+    """URL से Lottie JSON डेटा लोड करता है।"""
+    r = requests.get(url)
+    if r.status_code != 200:
+        return None
+    return r.json()
 
-lottie_analysis = load_lottiefile("path/to/analysis.json") # Replace with actual path or URL
+# Lottie URLs for analysis and success
+LOTTIE_ANALYSIS_URL = "https://lottie.host/75231c50-8916-43b8-89c5-34440807f4ac/2q36b7G1gT.json" # Checking/Loading animation
+LOTTIE_ANALYSIS = load_lottieurl(LOTTIE_ANALYSIS_URL)
 
 # --- फ़ंक्शन्स ---
 
@@ -93,9 +61,9 @@ def extract_bill_data(image_file, prompt_text):
     # एक्सट्रैक्शन के लिए विस्तृत प्रॉम्प्ट
     full_prompt = (
         "आप एक विशेषज्ञ डेटा एक्सट्रैक्टर हैं। इस बिजली बिल से निम्नलिखित जानकारी निकालें और इसे केवल एक JSON स्ट्रिंग के रूप में आउटपुट करें: "
-        "1. Consumer_ID, 2. Consumer_Name, 3. Sanctioned_Load_kW, 4. Units_Consumed_kWh, 5. Billing_Date, "
-        "6. Total_Amount_Payable_INR, 7. Discom_Name. "
-        "प्रत्येक कुंजी (key) के लिए उचित डेटाटाइप का उपयोग करें (नंबर के लिए नंबर)। यदि कोई मान नहीं मिलता है, तो उसे 'N/A' सेट करें। "
+        "1. Consumer_ID (string), 2. Consumer_Name (string), 3. Sanctioned_Load_kW (number), 4. Units_Consumed_kWh (number), "
+        "5. Billing_Date (string, format YYYY-MM-DD), 6. Total_Amount_Payable_INR (number), 7. Discom_Name (string). "
+        "यदि कोई मान नहीं मिलता है, तो उसे 'N/A' सेट करें। JSON के बाहर कोई अतिरिक्त टेक्स्ट न डालें। "
         "यहां अतिरिक्त संदर्भ है: " + prompt_text
     )
     
@@ -107,42 +75,44 @@ def extract_bill_data(image_file, prompt_text):
         
         # आउटपुट को क्लीन करें (केवल JSON स्ट्रिंग रखें)
         json_str = response.text.strip()
+        
+        # प्रॉम्प्ट इंजीनियरिंग सुरक्षा: कभी-कभी Gemini अतिरिक्त टेक्स्ट जोड़ता है
         if json_str.startswith("```json"):
             json_str = json_str.strip("```json").strip("```").strip()
-        
+            
         return json.loads(json_str)
     except Exception as e:
-        st.error(f"Gemini API Error during extraction: {e}")
+        st.error(f"Gemini API Error or JSON Parsing Error during extraction: {e}")
         return None
 
+@st.cache_data(show_spinner=False)
 def analyze_bill(bill_data):
     """Gemini Pro का उपयोग करके बिल की विसंगतियों (discrepancies) का पता लगाता है।"""
     
-    # यह एक डमी टैरिफ डेटाबेस है (आपको इसे अपने Discom/Division के अनुसार अपडेट करना होगा)
+    # यह एक डमी टैरिफ डेटाबेस है - वास्तविक दरें डालें
     DUMMY_TARIFF = {
-        "fixed_charge_per_kW": 150,
-        "energy_rate_slab1_upto_150_kWh": 6.00,
-        "energy_rate_slab2_above_150_kWh": 7.50,
+        "fixed_charge_per_kW": 120,
+        "energy_rate_slab1_upto_100_kWh": 5.50,
+        "energy_rate_slab2_above_100_kWh": 7.00,
         "duty_percentage": 0.05
     }
     
-    # Analysis Prompt: डेटा और टैरिफ रेट्स को पास करें
     analysis_prompt = f"""
     एक बिजली बिल विश्लेषण विशेषज्ञ के रूप में कार्य करें। बिल का डेटा नीचे दिया गया है:
     {json.dumps(bill_data, indent=2)}
 
-    क्षेत्र के लिए मान्य (valid) टैरिफ दरें (केवल उदाहरण के लिए):
+    क्षेत्र के लिए मान्य अनुमानित टैरिफ दरें:
     Fixed Charge: ₹{DUMMY_TARIFF['fixed_charge_per_kW']} प्रति kW
-    Energy Rate (0-150 kWh): ₹{DUMMY_TARIFF['energy_rate_slab1_upto_150_kWh']}
-    Energy Rate (Above 150 kWh): ₹{DUMMY_TARIFF['energy_rate_slab2_above_150_kWh']}
+    Energy Rate (0-100 kWh): ₹{DUMMY_TARIFF['energy_rate_slab1_upto_100_kWh']}
+    Energy Rate (Above 100 kWh): ₹{DUMMY_TARIFF['energy_rate_slab2_above_100_kWh']}
     Duty: {DUMMY_TARIFF['duty_percentage']*100}%
 
     निम्नलिखित संभावित त्रुटियों या विसंगतियों (discrepancies) की पहचान करें:
-    1. **Calculation Error:** ऊपर दी गई दरों के आधार पर कुल बिल राशि की पुनर्गणना (re-calculate) करें और इसकी तुलना 'Total_Amount_Payable_INR' से करें। यदि 5% से अधिक अंतर है, तो इसे गलती मानें।
-    2. **High Energy Use:** यदि 'Units_Consumed_kWh' (यूनिट खपत) 'Sanctioned_Load_kW' (सैंक्शनड लोड) के प्रति kW 250 यूनिट से अधिक है, तो इसे असामान्य रूप से उच्च खपत (High Consumption) के रूप में चिह्नित करें।
-    3. **Missing Data:** बिल में कोई महत्वपूर्ण डेटा (जैसे सैंक्शनड लोड) गायब है।
+    1. **Calculation Error:** ऊपर दी गई दरों के आधार पर कुल बिल राशि की पुनर्गणना (re-calculate) करें और इसकी तुलना 'Total_Amount_Payable_INR' से करें। यदि 3% से अधिक अंतर है, तो इसे गलती मानें।
+    2. **High Energy Use (असामान्य खपत):** यदि 'Units_Consumed_kWh' (यूनिट खपत) 'Sanctioned_Load_kW' (सैंक्शनड लोड) के प्रति kW 200 यूनिट से अधिक है, तो इसे असामान्य रूप से उच्च खपत के रूप में चिह्नित करें।
+    3. **Missing Data:** बिल में कोई महत्वपूर्ण डेटा (जैसे Sanctioned Load) गायब है।
 
-    अपने निष्कर्षों को एक JSON सूची के रूप में आउटपुट करें, जहां प्रत्येक आइटम में 'Mistake_Code' (जैसे CALC_ERR, HIGH_USE, MISSING_DATA) और 'Description_Hindi' हो। यदि कोई गलती नहीं मिलती है, तो एक खाली सूची आउटपुट करें।
+    अपने निष्कर्षों को एक JSON सूची के रूप में आउटपुट करें, जहां प्रत्येक आइटम में 'Mistake_Code' (जैसे CALC_ERR, HIGH_USE, MISSING_DATA) और 'Description_Hindi' हो। यदि कोई गलती नहीं मिलती है, तो एक खाली सूची आउटपुट करें। केवल JSON सूची ही आउटपुट करें।
     """
     
     try:
@@ -150,16 +120,14 @@ def analyze_bill(bill_data):
             model='gemini-2.5-flash',
             contents=[analysis_prompt]
         )
-        
-        # आउटपुट को JSON सूची में पार्स करें
         json_str = response.text.strip()
+        
         if json_str.startswith("```json"):
             json_str = json_str.strip("```json").strip("```").strip()
             
         return json.loads(json_str)
     except Exception as e:
-        st.error(f"Gemini API Error during analysis: {e}")
-        return [{"Mistake_Code": "API_FAIL", "Description_Hindi": "विश्लेषण के दौरान एक तकनीकी त्रुटि हुई।"}]
+        return [{"Mistake_Code": "API_FAIL", "Description_Hindi": f"विश्लेषण के दौरान एक तकनीकी त्रुटि हुई: {e}"}]
 
 def generate_application(bill_data, selected_mistakes, extra_context, language):
     """Gemini Pro का उपयोग करके शिकायत पत्र जनरेट करता है।"""
@@ -173,6 +141,7 @@ def generate_application(bill_data, selected_mistakes, extra_context, language):
     नाम: {bill_data.get('Consumer_Name', 'N/A')}
     उपभोक्ता ID: {bill_data.get('Consumer_ID', 'N/A')}
     डिस्कोम: {bill_data.get('Discom_Name', 'N/A')}
+    बिल राशि: {bill_data.get('Total_Amount_Payable_INR', 'N/A')}
     
     **शिकायत के मुख्य बिंदु:**
     {mistake_descriptions}
@@ -182,7 +151,7 @@ def generate_application(bill_data, selected_mistakes, extra_context, language):
     
     **पत्र की भाषा:** "{'हिंदी' if language == 'Hindi' else 'English'}" होनी चाहिए।
     
-    पत्र विनम्र, औपचारिक और कार्रवाई की मांग करने वाला होना चाहिए। केवल पत्र का मुख्य भाग (Body of the letter) आउटपुट करें, अभिवादन (Salutation) और समापन (Closing) सहित।
+    पत्र विनम्र, औपचारिक और कार्रवाई की मांग करने वाला होना चाहिए।
     """
     
     try:
@@ -196,21 +165,20 @@ def generate_application(bill_data, selected_mistakes, extra_context, language):
 
 # --- PDF और DOCX जनरेशन फंक्शन्स ---
 def create_pdf(text_content):
-    """टेक्स्ट से PDF बनाता है (ReportLab)"""
-    buffer = io.BytesIO()
-    p = canvas.Canvas(buffer)
-    # ReportLab हिंदी फोंट को सीधे सपोर्ट नहीं करता, इसलिए यह केवल डमी टेक्स्ट के लिए है
-    p.drawString(100, 750, "Generated Application:")
-    text_lines = text_content.split('\n')
-    y_position = 730
-    for line in text_lines:
-        p.drawString(100, y_position, line)
-        y_position -= 15
-        if y_position < 50:
-            p.showPage()
-            y_position = 780
+    """टेक्स्ट से PDF बनाता है (fpdf2 के साथ यूनिकोड सपोर्ट)"""
+    pdf = FPDF()
+    try:
+        # हिंदी सपोर्ट के लिए फ़ॉन्ट जोड़ें (यह फ़ाइल आपके रेपो में होनी चाहिए)
+        pdf.add_font("NotoSans", style="", fname="NotoSans-Regular.ttf", uni=True)
+        pdf.set_font("NotoSans", size=10)
+    except RuntimeError:
+        # यदि फ़ॉन्ट फ़ाइल नहीं मिलती है, तो एक डिफ़ॉल्ट फ़ॉन्ट का उपयोग करें
+        pdf.set_font("Arial", size=10)
+        
+    pdf.add_page()
+    pdf.multi_cell(0, 5, text_content)
     
-    p.save()
+    buffer = io.BytesIO(pdf.output(dest='S').encode('latin-1')) # 'S' returns as bytes
     buffer.seek(0)
     return buffer
 
@@ -230,12 +198,12 @@ st.markdown("""
 <style>
     /* Main container styling */
     .stApp {
-        background-color: #f0f2f6; /* Light gray background */
-        color: #1f2937; /* Dark text */
+        background-color: #f0f2f6; 
+        color: #1f2937;
     }
     /* Header/Title styling */
     h1 {
-        color: #0b7a74; /* Primary Teal Color */
+        color: #0b7a74; 
         text-align: center;
         margin-bottom: 0.5em;
         font-weight: 700;
@@ -266,11 +234,6 @@ st.markdown("""
         border-radius: 10px;
         padding: 20px;
     }
-    /* Success/Error/Info boxes */
-    div[data-testid="stAlert"] {
-        border-left: 6px solid #0b7a74 !important;
-        border-radius: 8px;
-    }
     /* Main Content Area Padding */
     .block-container {
         padding-top: 2rem;
@@ -286,11 +249,14 @@ st.markdown("### बिजली बिल का विश्लेषण क�
 col1, col2 = st.columns([1, 2])
 
 with col1:
-    st_lottie(
-        lottie_analysis,
-        height=200,
-        key="analysis_animation",
-    )
+    if LOTTIE_ANALYSIS:
+        st_lottie(
+            LOTTIE_ANALYSIS,
+            height=200,
+            key="analysis_animation",
+        )
+    else:
+        st.header("Upload")
     
     st.info("💡 **पहला चरण:** अपना बिजली बिल (PNG/JPG) अपलोड करें।")
 
@@ -306,23 +272,32 @@ with col2:
         placeholder="जैसे: मेरा डिस्कॉम UPPCL है, यह वाणिज्यिक (Commercial) बिल है।"
     )
 
-# --- 1. OCR एक्सट्रैक्शन ---
-bill_data = {}
-if uploaded_file is not None:
-    # फाइल को Image.open() के लिए in-memory buffer में पास करें
-    with st.spinner("⏳ बिल से डेटा निकाला जा रहा है... (Gemini Vision)"):
-        bill_data = extract_bill_data(uploaded_file, extra_ocr_context)
+# Session state initialization
+if 'bill_data' not in st.session_state:
+    st.session_state.bill_data = None
+if 'mistakes' not in st.session_state:
+    st.session_state.mistakes = None
 
-    if bill_data and bill_data.get('Consumer_ID'):
+# --- 1. OCR एक्सट्रैक्शन ---
+if uploaded_file is not None:
+    # यदि नई फ़ाइल अपलोड की गई है, तो सत्र स्थिति रीसेट करें
+    if st.session_state.bill_data is None or st.session_state.uploaded_filename != uploaded_file.name:
+        st.session_state.uploaded_filename = uploaded_file.name
+        
+        with st.spinner("⏳ बिल से डेटा निकाला जा रहा है... (Gemini Vision)"):
+            bill_data = extract_bill_data(uploaded_file, extra_ocr_context)
+            st.session_state.bill_data = bill_data
+            st.session_state.mistakes = None # विश्लेषण को रीसेट करें
+
+    if st.session_state.bill_data and st.session_state.bill_data.get('Consumer_ID'):
         st.success("✅ डेटा सफलतापूर्वक निकाला गया!")
         st.markdown("### 🔍 निकाले गए बिल की डिटेल्स")
-        st.json(bill_data)
-        st.session_state.bill_data = bill_data
-    elif bill_data is not None:
+        st.json(st.session_state.bill_data)
+    elif st.session_state.bill_data is not None:
         st.warning("⚠️ डेटा नहीं निकाला जा सका। कृपया स्पष्ट तस्वीर अपलोड करें।")
 
 # --- 2. बिल एनालिसिस ---
-if 'bill_data' in st.session_state and st.session_state.bill_data:
+if st.session_state.bill_data:
     st.markdown("---")
     st.markdown("### ⚙️ चरण 2: बिल विसंगति (Error) विश्लेषण")
     
@@ -332,7 +307,7 @@ if 'bill_data' in st.session_state and st.session_state.bill_data:
             st.session_state.mistakes = mistakes
 
 # --- 3. एप्लीकेशन जनरेशन ---
-if 'mistakes' in st.session_state and st.session_state.mistakes is not None:
+if st.session_state.mistakes is not None:
     st.markdown("---")
     st.markdown("### ✍️ चरण 3: शिकायत पत्र जनरेट करें")
     
@@ -340,13 +315,12 @@ if 'mistakes' in st.session_state and st.session_state.mistakes is not None:
         st.warning("🚨 निम्नलिखित संभावित विसंगतियाँ पाई गई हैं:")
         
         selected_mistakes = []
-        st.session_state.selected_mistakes = []
         
         # यूज़र को चुनने की अनुमति
         for i, mistake in enumerate(st.session_state.mistakes):
             key = f"mistake_{i}"
             checked = st.checkbox(
-                f"**[{mistake['Mistake_Code']}]** {mistake['Description_Hindi']}",
+                f"**[{mistake.get('Mistake_Code', 'N/A')}]** {mistake.get('Description_Hindi', 'विवरण उपलब्ध नहीं')}",
                 key=key,
                 value=True # डिफ़ॉल्ट रूप से सभी चुनें
             )
@@ -356,7 +330,7 @@ if 'mistakes' in st.session_state and st.session_state.mistakes is not None:
         st.session_state.selected_mistakes = selected_mistakes
         
         if selected_mistakes:
-            col_lang, col_go = st.columns([1, 3])
+            col_lang, _ = st.columns([1, 3])
             
             with col_lang:
                 app_language = st.selectbox(
@@ -366,11 +340,11 @@ if 'mistakes' in st.session_state and st.session_state.mistakes is not None:
                 )
             
             app_extra_context = st.text_area(
-                "📝 पत्र के लिए अतिरिक्त संदर्भ (Additional Context)",
-                placeholder="जैसे: मुझे इस बिल के कारण नोटिस मिला है। कृपया इसे जल्द से जल्द ठीक करें।"
+                "📝 पत्र के लिए अतिरिक्त संदर्भ (Add Extra Context)",
+                placeholder="जैसे: मुझे इस बिल के कारण नोटिस मिला है और मीटर खराब हो सकता है।"
             )
             
-            if col_go.button("📝 शिकायत पत्र जनरेट करें", key="generate_app_btn"):
+            if st.button("📝 शिकायत पत्र जनरेट करें", key="generate_app_btn"):
                 with st.spinner("⏳ पत्र तैयार किया जा रहा है... (Gemini Pro)"):
                     application_text = generate_application(
                         st.session_state.bill_data,
@@ -396,7 +370,7 @@ if 'application_text' in st.session_state and st.session_state.application_text:
         height=400
     )
     
-    col_pdf, col_docx, col_copy = st.columns(3)
+    col_pdf, col_docx, _ = st.columns([1, 1, 2])
     
     # PDF सेव करें
     pdf_file = create_pdf(st.session_state.application_text)
@@ -415,6 +389,3 @@ if 'application_text' in st.session_state and st.session_state.application_text:
         file_name=f"Complaint_Letter_{st.session_state.bill_data.get('Consumer_ID', 'N-A')}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
-    
-    # Text कॉपी करने के लिए Streamlit का उपयोग नहीं होता, पर यूज़र text_area से कॉपी कर सकता है।
-    col_copy.markdown("<span></span>", unsafe_allow_html=True)  # स्पेस होल्डर
